@@ -929,8 +929,10 @@ def lalsim_SimNeutronStarRadius(mass_in_SI, fam):
         raise ValueError("Unable to convert mass_in_SI to float.")
     except TypeError:
         raise TypeError("Unable to convert mass_in_SI to float.")
-
-    return SimNeutronStarRadius(mass_in_SI, fam)
+    try:
+        return SimNeutronStarRadius(mass_in_SI, fam)
+    except Exception as e:
+        raise LALError("Unable to compute radius: {}".format(e))
 
 
 def lalsim_SimNeutronStarLoveNumberK2(mass_in_SI, fam):
@@ -944,6 +946,20 @@ def lalsim_SimNeutronStarLoveNumberK2(mass_in_SI, fam):
 
     return SimNeutronStarLoveNumberK2(mass_in_SI, fam)
 
+
+def lalsim_CreateEoSbyName(name):
+    from lalsimulation import SimNeutronStarEOSByName
+    try:
+        return SimNeutronStarEOSByName(name)
+    except Exception as e:
+        raise LALError("Unable to create EOS: {}".format(e))
+
+def lalsim_CreateEoSfromFile(filename):
+    from lalsimulation import SimNeutronStarEOSFromFile
+    try:
+        return SimNeutronStarEOSFromFile(filename)
+    except Exception as e:
+        raise LALError("Unable to create EOS: {}".format(e))
 
 def spline_angle_xform(delta_psi):
     """
@@ -1073,3 +1089,6 @@ def calculate_time_to_merger(frequency, mass_1, mass_2, chi=0, safety=1.1):
         chi,
         -1
     )
+
+class LALError(Exception):
+    pass

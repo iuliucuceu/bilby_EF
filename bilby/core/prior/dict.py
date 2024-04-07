@@ -975,3 +975,6 @@ def create_default_prior(name, default_priors_file=None):
 
 class IllegalConditionsException(ConditionalPriorDictException):
     """Exception class to handle prior dicts that contain unresolvable conditions."""
+
+class ZeroLikelihoodException(Exception):
+    pass

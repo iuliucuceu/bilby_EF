@@ -24,11 +24,14 @@ from .utils import (lalsim_SimNeutronStarEOS4ParamSDGammaCheck,
                     lalsim_SimNeutronStarFamMinimumMass,
                     lalsim_SimNeutronStarMaximumMass,
                     lalsim_SimNeutronStarRadius,
-                    lalsim_SimNeutronStarLoveNumberK2)
+                    lalsim_SimNeutronStarLoveNumberK2,
+                    lalsim_CreateEoSbyName,
+                    lalsim_CreateEoSfromFile)
 
+from .utils import LALError
 from ..core.likelihood import MarginalizedLikelihoodReconstructionError
 from ..core.utils import logger, solar_mass, gravitational_constant, speed_of_light, command_line_args, safe_file_dump
-from ..core.prior import DeltaFunction
+from ..core.prior import DeltaFunction, ZeroLikelihoodException
 from .utils import lalsim_SimInspiralTransformPrecessingNewInitialConditions
 from .eos.eos import IntegrateTOV
 from .cosmology import get_cosmology, z_at_value
@@ -317,13 +320,32 @@ def convert_to_lal_binary_neutron_star_parameters(parameters):
 
     if not any([key in converted_parameters for key in
                 ['lambda_1', 'lambda_2',
+                 'eos_assumption', 'eos_index' 
                  'lambda_tilde', 'delta_lambda_tilde', 'lambda_symmetric',
                  'eos_polytrope_gamma_0', 'eos_spectral_pca_gamma_0', 'eos_v1']]):
         converted_parameters['lambda_1'] = 0
         converted_parameters['lambda_2'] = 0
         added_keys = added_keys + ['lambda_1', 'lambda_2']
         return converted_parameters, added_keys
-
+    
+    if 'eos_index' in converted_parameters.keys():
+        converted_parameters = generate_source_frame_parameters(converted_parameters)
+        converted_parameters['lambda_1'], converted_parameters['lambda_2'] =\
+            lambda_from_mass_and_eos_safe(mass_i = converted_parameters['mass_1_source'], index = converted_parameters['eos_index']),\
+            lambda_from_mass_and_eos_safe(mass_i = converted_parameters['mass_2_source'], index = converted_parameters['eos_index'])
+    if 'eos_assumption' in converted_parameters.keys():
+        converted_parameters = generate_source_frame_parameters(converted_parameters)
+        try:  # Get the common value
+            eos_assumption = converted_parameters['eos_assumption'].iloc[0]
+        except AttributeError:
+            eos_assumption = converted_parameters['eos_assumption']
+        
+        try: # Apply function to each value in the 'mass_1_source' and 'mass_2_source' Series
+            converted_parameters['lambda_1'] = converted_parameters['mass_1_source'].apply(lambda mass: lambda_from_mass_and_eos_safe(mass, eos_assumption))
+            converted_parameters['lambda_2'] = converted_parameters['mass_2_source'].apply(lambda mass: lambda_from_mass_and_eos_safe(mass, eos_assumption))
+        except AttributeError:
+            converted_parameters['lambda_1'] = lambda_from_mass_and_eos_safe(converted_parameters['mass_1_source'], eos_assumption)
+            converted_parameters['lambda_2'] = lambda_from_mass_and_eos_safe(converted_parameters['mass_2_source'], eos_assumption)
     if 'delta_lambda_tilde' in converted_parameters.keys():
         converted_parameters['lambda_1'], converted_parameters['lambda_2'] =\
             lambda_tilde_delta_lambda_tilde_to_lambda_1_lambda_2(
@@ -804,6 +826,75 @@ def lambda_from_mass_and_family(mass_i, family):
     lambda_i = (2. / 3.) * love_number_k2 / compactness ** 5.
 
     return lambda_i
+
+
+def lambda_from_mass_and_eos_assumption(mass_i, eos_name=None, path=None, index=None): ##### Placeholder, will need to allow for any tabular eos, not just named ones or indexed ones
+    """
+    Using a 1 parameter NS family, obtained from a given tabular EOS (p-e),
+    calculate the tidal deformability of a NS with mass_i.
+    Parameters
+    ----------
+    mass_i: Component mass of neutron star in solar masses.
+    eos_name: Name of the tabular EOS (p-e) to use. ##### For now, just a string
+    path: Path to the tabular EOS file.
+    index: Index of the tabular EOS in the file, ordered by maximum mass allowed
+    Returns
+    -------
+    lambda_i: float
+        component tidal deformability parameter
+    """
+    # Dictionary of tabular EOS names to numerical values
+    eos_dict = {1: "ALF2", 2: "APR4_EPP", 3: "BSK20", 4: "BSK21", 5: "SK255",
+                6: "SKB", 7: "SKI2", 8: "SLY4", 9: "WFF1", 10: "WFF2",
+                11: "LPB(chiral)", 12: "FTNS(KOST2)", 13: "GMSR(DHSL69)",
+                14: "HS(TM1)", 15: "SFHx", 16: "HS(NL3)", 17: "XMLSLZ(DDME-X)",
+                18: "XMLSLZ(PKDD)", 19: "PCSB2", 20: "ABHT", 21: "MBB(HSDD2K)",
+                22: "OMHN(DD2Y)", 23: "BBKF(DD2-SF)", 24: "KBH(QHC21_DT)"}
+    if path and not index:
+        eos = lalsim_CreateEoSfromFile(path)
+    elif eos_name <= 10:
+        eos = lalsim_CreateEoSbyName(eos_dict[eos_name])
+    # Make sure index is valid and make it an integer by approximating the float upwards
+    elif index and path:
+        ind = str(int(np.ceil(index)))
+        filename = path + ind + ".dat"
+        eos = lalsim_CreateEoSfromFile(filename)
+    else:
+        return ValueError("Please provide a valid tabular EOS name or path to a tabular EOS file. If using indexing, provide a base path and index.")
+    family = lalsim_CreateSimNeutronStarFamily(eos)
+    if lalsim_SimNeutronStarMaximumMass(family) / solar_mass < mass_i:
+        raise ZeroLikelihoodException
+    radius = lalsim_SimNeutronStarRadius(mass_i * solar_mass, family)
+    love_number_k2 = lalsim_SimNeutronStarLoveNumberK2(mass_i * solar_mass, family)
+    mass_geometrized = mass_i * solar_mass * gravitational_constant / speed_of_light ** 2.
+    compactness = mass_geometrized / radius
+    lambda_i = (2. / 3.) * love_number_k2 / compactness ** 5.
+    return lambda_i
+
+
+def lambda_from_mass_and_eos_safe(mass_i, eos_name=None, path=None, index=None):
+    def count_decimal_places(number):  # Helper function to return number of decimals
+        if isinstance(number, int): return 0
+        _, decimal_part = str(number).split(".")
+        return len(decimal_part)
+
+    try:
+        lambda_i = lambda_from_mass_and_eos_assumption(mass_i, eos_name, path, index)
+        return lambda_i
+    except LALError:  # Try to first remove decimal part, then add random number to the first two decimal places
+        num_digits = count_decimal_places(mass_i)
+        while num_digits > 6:
+            modified_parameter = round(mass_i, num_digits - 1)
+            print("Trying to call the function with the modified parameters: {}".format(modified_parameter))
+            try:
+                lambda_i = lambda_from_mass_and_eos_assumption(modified_parameter, eos_name, path, index)
+                return lambda_i
+            except LALError:
+                num_digits -= 1  # reduce the number of decimal places for the next iteration
+
+        logger.info("Failed to call the function with the modified parameters: {}".format(modified_parameter))
+        logger.info("Returning 0.0, so Exception")
+        raise ZeroLikelihoodException
 
 
 def eos_family_physical_check(eos):

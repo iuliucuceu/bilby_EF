@@ -8,7 +8,7 @@ from scipy.special import logsumexp
 
 from ...core.likelihood import Likelihood
 from ...core.utils import logger, UnsortedInterp2d, create_time_series
-from ...core.prior import Interped, Prior, Uniform, DeltaFunction
+from ...core.prior import Interped, Prior, Uniform, DeltaFunction, ZeroLikelihoodException
 from ..detector import InterferometerList, get_empty_interferometer, calibration
 from ..prior import BBHPriorDict, Cosmological
 from ..utils import noise_weighted_inner_product, zenith_azimuth_to_ra_dec, ln_i0
@@ -404,8 +404,11 @@ class GravitationalWaveTransient(Likelihood):
         return self._noise_log_likelihood_value
 
     def log_likelihood_ratio(self):
-        waveform_polarizations = \
-            self.waveform_generator.frequency_domain_strain(self.parameters)
+        try:
+            waveform_polarizations = \
+                self.waveform_generator.frequency_domain_strain(self.parameters)
+        except ZeroLikelihoodException:
+            return np.nan_to_num(-np.inf)
         if waveform_polarizations is None:
             return np.nan_to_num(-np.inf)
 
